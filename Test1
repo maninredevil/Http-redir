@@ -42,8 +42,6 @@ import org.apache.hc.core5.http.io.entity.StringEntity;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.HttpClientErrorException;
-
 import javax.servlet.http.HttpServletRequest;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -67,22 +65,22 @@ public class ProxyController {
     @RequestMapping(value = "/**", method = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE})
     public ResponseEntity<?> proxyRequest(HttpServletRequest request, @RequestBody(required = false) String body) {
         try {
-            // Создаем URL для перенаправления
+            // Формируем URL для IDM
             String path = request.getRequestURI();
             String queryString = request.getQueryString();
             String url = idmUrl + path + (queryString != null ? "?" + queryString : "");
 
-            // Определяем HTTP-метод
+            // Создаем запрос
             HttpUriRequestBase httpRequest = createHttpRequest(request.getMethod(), url, body);
 
-            // Устанавливаем заголовки
+            // Переносим заголовки клиента
             Enumeration<String> headerNames = request.getHeaderNames();
             while (headerNames.hasMoreElements()) {
                 String headerName = headerNames.nextElement();
                 httpRequest.addHeader(headerName, request.getHeader(headerName));
             }
 
-            // Отправляем запрос
+            // Выполняем запрос
             HttpResponse response = httpClient.execute(httpRequest, httpClientContext);
 
             // Читаем ответ
@@ -103,11 +101,15 @@ public class ProxyController {
         switch (method.toUpperCase()) {
             case "POST":
                 request = new HttpPost(url);
-                ((HttpPost) request).setEntity(new StringEntity(body, "UTF-8"));
+                if (body != null) {
+                    ((HttpPost) request).setEntity(new StringEntity(body, "UTF-8"));
+                }
                 break;
             case "PUT":
                 request = new HttpPut(url);
-                ((HttpPut) request).setEntity(new StringEntity(body, "UTF-8"));
+                if (body != null) {
+                    ((HttpPut) request).setEntity(new StringEntity(body, "UTF-8"));
+                }
                 break;
             case "DELETE":
                 request = new HttpDelete(url);
@@ -118,4 +120,3 @@ public class ProxyController {
         return request;
     }
 }
-
