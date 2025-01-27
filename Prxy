@@ -1,0 +1,124 @@
+server:
+  port: 8080
+
+kdcproxy:
+  servers:
+    - host: "kdc1.example.com"
+      port: 88
+      protocol: UDP
+    - host: "kdc2.example.com"
+      port: 88
+      protocol: TCP
+  timeout: 5000
+  fragment-size: 1400
+
+import org.bouncycastle.asn1.*;
+import java.io.IOException;
+
+public class KerberosMessageHandler {
+
+    // Декодирование ASN.1 структуры
+    public static ASN1Encodable decode(byte[] data) throws IOException {
+        ASN1InputStream inputStream = new ASN1InputStream(data);
+        return inputStream.readObject();
+    }
+
+    // Кодирование ASN.1 структуры
+    public static byte[] encode(ASN1Encodable asn1Object) throws IOException {
+        return asn1Object.toASN1Primitive().getEncoded();
+    }
+
+    // Пример создания запроса Kerberos в формате ASN.1
+    public static byte[] createKerberosRequest(String realm, String principalName) throws IOException {
+        ASN1EncodableVector vector = new ASN1EncodableVector();
+
+        vector.add(new DERUTF8String(realm));
+        vector.add(new DERUTF8String(principalName));
+
+        return new DERSequence(vector).getEncoded();
+    }
+}
+
+@Service
+public class KdcProxyService {
+
+    private final KdcProxyProperties properties;
+
+    public KdcProxyService(KdcProxyProperties properties) {
+        this.properties = properties;
+    }
+
+    public byte[] forwardRequest(byte[] requestBody) throws IOException {
+        // Раскодируем запрос с помощью ASN.1
+        ASN1Encodable decodedRequest = KerberosMessageHandler.decode(requestBody);
+
+        // Логика отправки запроса на KDC
+        byte[] rawResponse = sendToKdc(requestBody);
+
+        // Кодируем ответ обратно в ASN.1 перед возвращением клиенту
+        return KerberosMessageHandler.encode(KerberosMessageHandler.decode(rawResponse));
+    }
+
+    private byte[] sendToKdc(byte[] requestBody) throws IOException {
+        for (KdcProxyProperties.KdcServerConfig server : properties.getServers()) {
+            try {
+                if ("UDP".equalsIgnoreCase(server.getProtocol())) {
+                    return sendUdpRequest(server, requestBody);
+                } else {
+                    return sendTcpRequest(server, requestBody);
+                }
+            } catch (IOException e) {
+                // Логгируем ошибку, если сервер недоступен
+                System.err.println("Ошибка при соединении с сервером: " + server.getHost());
+            }
+        }
+        throw new IOException("Все KDC-серверы недоступны");
+    }
+
+    private byte[] sendTcpRequest(KdcProxyProperties.KdcServerConfig server, byte[] requestBody) throws IOException {
+        try (Socket socket = new Socket(server.getHost(), server.getPort())) {
+            socket.getOutputStream().write(requestBody);
+            return socket.getInputStream().readAllBytes();
+        }
+    }
+
+    private byte[] sendUdpRequest(KdcProxyProperties.KdcServerConfig server, byte[] requestBody) throws IOException {
+        DatagramSocket socket = new DatagramSocket();
+        InetAddress address = InetAddress.getByName(server.getHost());
+
+        DatagramPacket packet = new DatagramPacket(requestBody, requestBody.length, address, server.getPort());
+        socket.send(packet);
+
+        byte[] buffer = new byte[properties.getFragmentSize()];
+        DatagramPacket responsePacket = new DatagramPacket(buffer, buffer.length);
+        socket.receive(responsePacket);
+
+        return Arrays.copyOf(buffer, responsePacket.getLength());
+    }
+}
+
+
+@RestController
+@RequestMapping("/KdcProxy")
+public class KdcProxyController {
+
+    private final KdcProxyService kdcProxyService;
+
+    public KdcProxyController(KdcProxyService kdcProxyService) {
+        this.kdcProxyService = kdcProxyService;
+    }
+
+    @PostMapping
+    public ResponseEntity<byte[]> proxyRequest(
+            @RequestBody byte[] requestBody,
+            @RequestHeader(value = "Content-Type", required = false) String contentType) {
+        try {
+            byte[] response = kdcProxyService.forwardRequest(requestBody);
+            return ResponseEntity.ok()
+                    .header("Content-Type", contentType)
+                    .body(response);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+}
