@@ -1,0 +1,17 @@
+@ConfigurationProperties(prefix = "kdcproxy")
+@Component
+public class KdcProxyProperties {
+    private List<KdcServerConfig> servers;
+    private int timeout;
+    private int fragmentSize;
+
+    // Getters and Setters
+
+    public static class KdcServerConfig {
+        private String host;
+        private int port;
+        private String protocol;
+
+        // Getters and Setters
+    }
+}
